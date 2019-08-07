@@ -30,10 +30,19 @@ namespace QBDI {
  * MONITOR & MWAIT // ununderstand access of these instructions
  * llvm::X86::MMX_MASKMOVQ64, // 64 bits implicit store to [rdi]
  * MOVS/MOVSB/MOVSW/MOVSD/MOVSQ // implicit move from [rsi] to [rdi] (between 8 and 64 bits r/w)
- * CMPS/CMPSB/CMPSW/CMPSD/CMPSQ // implicit compare betwen [rsi] and [rdi] (two read between 8 and 64 bits)
  * STOS/STOSB/STOSW/STOSD/STOSQ // implicit store to [rdi]
+ * REP/REPE/REPZ/REPNE/REPNZ    // instruction repeted
  */
 namespace {
+
+unsigned DOUBLE_READ[] = {
+    llvm::X86::CMPSB,
+    llvm::X86::CMPSL,
+    llvm::X86::CMPSQ,
+    llvm::X86::CMPSW,
+};
+
+size_t DOUBLE_READ_SIZE = sizeof(DOUBLE_READ)/sizeof(unsigned);
 
 unsigned READ_8[] = {
     llvm::X86::ADC8mi,
@@ -52,6 +61,7 @@ unsigned READ_8[] = {
     llvm::X86::CMP8mi8,
     llvm::X86::CMP8mr,
     llvm::X86::CMP8rm,
+    llvm::X86::CMPSB,
     llvm::X86::CMPXCHG8rm,
     llvm::X86::CRC32r32m8,
     llvm::X86::CRC32r64m8,
@@ -158,6 +168,7 @@ unsigned READ_16[] = {
     llvm::X86::CMP16mi8,
     llvm::X86::CMP16mr,
     llvm::X86::CMP16rm,
+    llvm::X86::CMPSW,
     llvm::X86::CMPXCHG16rm,
     llvm::X86::CRC32r32m16,
     llvm::X86::DEC16m,
@@ -312,6 +323,7 @@ unsigned READ_32[] = {
     llvm::X86::CMP32mi8,
     llvm::X86::CMP32mr,
     llvm::X86::CMP32rm,
+    llvm::X86::CMPSL,
     llvm::X86::CMPSSrm,
     llvm::X86::CMPXCHG32rm,
     llvm::X86::COMISSrm,
@@ -539,6 +551,7 @@ unsigned READ_64[] = {
     llvm::X86::CMP64mr,
     llvm::X86::CMP64rm,
     llvm::X86::CMPSDrm,
+    llvm::X86::CMPSQ,
     llvm::X86::CMPXCHG64rm,
     llvm::X86::CMPXCHG8B,
     llvm::X86::COMISDrm,
@@ -1992,14 +2005,15 @@ size_t STACK_READ_64_SIZE = sizeof(STACK_READ_64)/sizeof(unsigned);
  * | 1 bit stack access flag | 3 bits reserved | 12 bits unsigned access size |
  * ----------------------------------------------------------------------------
  *
- * ----------------------------------------------------------------------------
- * | 0xf                          READ ACCESS                             0x0 |
- * ----------------------------------------------------------------------------
- * | 1 bit stack access flag | 3 bits reserved | 12 bits unsigned access size |
- * ----------------------------------------------------------------------------
+ * ------------------------------------------------------------------------------------------------
+ * | 0xf                                   READ ACCESS                                        0x0 |
+ * ------------------------------------------------------------------------------------------------
+ * | 1 bit stack access flag | 1 bit double read | 2 bits reserved | 12 bits unsigned access size |
+ * ------------------------------------------------------------------------------------------------
 */
 
 #define STACK_ACCESS_FLAG 0x8000
+#define DOUBLE_READ_FLAG  0x4000
 #define READ(s) (s)
 #define WRITE(s) ((s)<<16)
 #define STACK_READ(s) (STACK_ACCESS_FLAG | s)
@@ -2008,6 +2022,7 @@ size_t STACK_READ_64_SIZE = sizeof(STACK_READ_64)/sizeof(unsigned);
 #define GET_WRITE_SIZE(v) (((v)>>16) & 0xfff)
 #define IS_STACK_READ(v) (((v) & STACK_ACCESS_FLAG) > 0)
 #define IS_STACK_WRITE(v) ((((v)>>16) & STACK_ACCESS_FLAG) > 0)
+#define IS_DOUBLE_READ(v) (((v) & DOUBLE_READ_FLAG) > 0)
 
 
 uint32_t MEMACCESS_INFO_TABLE[llvm::X86::INSTRUCTION_LIST_END] = {0};
@@ -2069,6 +2084,9 @@ void initMemAccessInfo() {
     _initMemAccessStackWrite(STACK_WRITE_16, STACK_WRITE_16_SIZE, 2);
     _initMemAccessStackWrite(STACK_WRITE_32, STACK_WRITE_32_SIZE, 4);
     _initMemAccessStackWrite(STACK_WRITE_64, STACK_WRITE_64_SIZE, 8);
+    for (size_t i = 0; i < DOUBLE_READ_SIZE; i++) {
+        MEMACCESS_INFO_TABLE[DOUBLE_READ[i]] |= DOUBLE_READ_FLAG;
+    }
 }
 
 unsigned getReadSize(const llvm::MCInst* inst) {
@@ -2085,6 +2103,10 @@ bool isStackRead(const llvm::MCInst* inst) {
 
 bool isStackWrite(const llvm::MCInst* inst) {
     return IS_STACK_WRITE(MEMACCESS_INFO_TABLE[inst->getOpcode()]);
+}
+
+bool isDoubleRead(const llvm::MCInst* inst) {
+    return IS_DOUBLE_READ(MEMACCESS_INFO_TABLE[inst->getOpcode()]);
 }
 
 unsigned getImmediateSize(const llvm::MCInst* inst, const llvm::MCInstrDesc* desc) {
