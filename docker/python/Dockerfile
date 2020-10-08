@@ -17,6 +17,7 @@ RUN yum update -y && \
         bash \
         sudo \
         cmake3 \
+        ccache \
         make \
         wget \
         zlib-devel \
